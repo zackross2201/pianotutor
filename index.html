@@ -1,0 +1,863 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>My Personal Piano Tutor</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script src="https://unpkg.com/@tonejs/midi"></script>
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+    <style>
+        @import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;600;900&display=swap');
+        
+        body {
+            font-family: 'Inter', sans-serif;
+            background-color: #111827;
+            color: #e5e7eb;
+            overflow: hidden;
+            touch-action: none;
+        }
+
+        /* PIANO SCROLLBAR */
+        .piano-scroll { overflow-x: auto; overflow-y: hidden; scrollbar-width: thin; scrollbar-color: #4b5563 #1f2937; }
+        .piano-scroll::-webkit-scrollbar { height: 8px; }
+        .piano-scroll::-webkit-scrollbar-track { background: #1f2937; }
+        .piano-scroll::-webkit-scrollbar-thumb { background: #4b5563; border-radius: 4px; }
+
+        /* KEYS */
+        .key { transition: fill 0.05s ease, transform 0.05s ease; }
+        .key.white { fill: #f3f4f6; stroke: #9ca3af; stroke-width: 1px; }
+        .key.black { fill: #1f2937; stroke: #000; stroke-width: 1px; }
+        
+        .key-label {
+            font-family: 'Inter', sans-serif;
+            font-size: 10px;
+            font-weight: 600;
+            fill: #6b7280;
+            pointer-events: none;
+        }
+        
+        .key.active-correct { fill: #4ade80 !important; transform: translateY(2px); }
+        .key.active-wrong { fill: #ef4444 !important; transform: translateY(2px); }
+        .key.active-neutral { fill: #60a5fa !important; transform: translateY(2px); }
+        .key.target { fill: #fcd34d !important; }
+        .key.black.target { fill: #d97706 !important; }
+
+        /* UI ELEMENTS */
+        .toggle-checkbox:checked { right: 0; border-color: #68D391; }
+        .toggle-checkbox:checked + .toggle-label { background-color: #68D391; }
+        
+        input[type=range] { -webkit-appearance: none; background: transparent; }
+        input[type=range]::-webkit-slider-thumb {
+            -webkit-appearance: none; height: 16px; width: 16px; border-radius: 50%;
+            background: #6366f1; cursor: pointer; margin-top: -6px;
+        }
+        input[type=range]::-webkit-slider-runnable-track {
+            width: 100%; height: 4px; cursor: pointer; background: #4b5563; border-radius: 2px;
+        }
+
+        .progress-container {
+            position: absolute; top: 0; left: 0; width: 100%; height: 6px; background: #1f2937; z-index: 20;
+        }
+        .progress-fill {
+            height: 100%; background: linear-gradient(90deg, #6366f1, #a855f7); width: 0%; transition: width 0.2s;
+        }
+
+        /* Song Menu Grid */
+        .song-card {
+            background: #1f2937; border: 1px solid #374151; border-radius: 1rem;
+            padding: 1.5rem; text-align: left; cursor: pointer; transition: all 0.2s;
+            display: flex; flex-direction: column; justify-content: space-between;
+            position: relative; overflow: hidden;
+        }
+        .song-card:hover { transform: translateY(-4px); border-color: #6366f1; background: #312e81; }
+        .song-card h3 { font-size: 1.25rem; font-weight: 800; color: white; margin-bottom: 0.5rem; }
+        .song-card p { font-size: 0.875rem; color: #9ca3af; margin-bottom: 1rem; }
+        
+        .song-actions {
+            display: flex; gap: 0.5rem; margin-top: auto;
+        }
+        .action-btn {
+            flex: 1; padding: 0.5rem; border-radius: 0.5rem; font-weight: 600; text-align: center;
+            transition: background 0.2s; font-size: 0.875rem;
+        }
+        .btn-play { background: #4f46e5; color: white; }
+        .btn-play:hover { background: #4338ca; }
+        .btn-listen { background: #059669; color: white; }
+        .btn-listen:hover { background: #047857; }
+
+        @keyframes bounceIn { 0% { transform: scale(0); opacity: 0; } 60% { transform: scale(1.2); } 100% { transform: scale(1); opacity: 1; } }
+        .pop-in { animation: bounceIn 0.5s cubic-bezier(0.175, 0.885, 0.32, 1.275) forwards; }
+        @keyframes shake { 0%, 100% { transform: translateX(0); } 25% { transform: translateX(-5px); } 75% { transform: translateX(5px); } }
+        .shake { animation: shake 0.3s ease-in-out; }
+    </style>
+</head>
+<body class="h-screen flex flex-col bg-gray-900 text-white">
+
+    <!-- TOP BAR -->
+    <header class="bg-gray-800 border-b border-gray-700 p-3 flex flex-col md:flex-row gap-4 justify-between items-center shadow-md z-20 h-auto md:h-24 relative">
+        
+        <!-- Left: Logo & Status -->
+        <div class="flex flex-col w-full md:w-1/4 items-center md:items-start">
+            <div class="flex items-center gap-2 text-indigo-400 font-bold text-xl">
+                <i class="fa-solid fa-music"></i> PianoBuddy
+            </div>
+            <div class="flex gap-4 text-xs text-gray-500 mt-1">
+                <div class="flex items-center gap-1">
+                    <span class="w-2 h-2 rounded-full bg-red-500" id="statusDot"></span>
+                    <span id="statusText">Not Connected</span>
+                </div>
+                <div id="scoreDisplay" class="hidden font-bold text-yellow-400 flex items-center gap-1">
+                    <i class="fa-solid fa-star"></i> <span id="scoreValue">0</span>
+                </div>
+            </div>
+        </div>
+
+        <!-- Center: Song Title -->
+        <div id="songTitleDisplay" class="text-lg font-bold text-white tracking-widest hidden md:block text-center w-full md:w-1/2 truncate px-2">
+            FREE PLAY
+        </div>
+
+        <!-- Right: Controls -->
+        <div class="flex items-center gap-3 justify-center md:justify-end w-full md:w-1/4 flex-wrap">
+            
+            <!-- Ease Mode Toggle -->
+            <div class="flex items-center gap-2 bg-indigo-900/30 px-3 py-1 rounded-full border border-indigo-500/30" title="Easy Mode: Auto-zoom piano and auto-wait">
+                <span class="text-xs text-indigo-300 font-bold uppercase">Ease</span>
+                <div class="relative inline-block w-10 mr-2 align-middle select-none transition duration-200 ease-in">
+                    <input type="checkbox" name="toggle" id="easeModeToggle" class="toggle-checkbox absolute block w-5 h-5 rounded-full bg-white border-4 appearance-none cursor-pointer checked:right-0 checked:border-indigo-500 transition-all duration-200"/>
+                    <label for="easeModeToggle" class="toggle-label block overflow-hidden h-5 rounded-full bg-gray-600 cursor-pointer"></label>
+                </div>
+            </div>
+
+            <!-- Wait Mode Toggle -->
+            <div class="flex items-center gap-2" id="waitModeContainer">
+                <span class="text-xs text-gray-400 font-bold uppercase">Wait</span>
+                <div class="relative inline-block w-10 mr-2 align-middle select-none transition duration-200 ease-in">
+                    <input type="checkbox" name="toggle" id="waitModeToggle" class="toggle-checkbox absolute block w-5 h-5 rounded-full bg-white border-4 appearance-none cursor-pointer checked:right-0 checked:border-indigo-500 transition-all duration-200" checked/>
+                    <label for="waitModeToggle" class="toggle-label block overflow-hidden h-5 rounded-full bg-gray-600 cursor-pointer"></label>
+                </div>
+            </div>
+
+            <button id="calibrateBtn" class="bg-gray-700 hover:bg-gray-600 text-white px-2 py-1 rounded text-xs border border-gray-600" title="Fix Transpose Issues">
+                <i class="fa-solid fa-wrench"></i>
+            </button>
+
+            <input type="file" id="midiUpload" accept=".mid,.midi" class="hidden">
+
+            <!-- BIG Song Button -->
+            <button id="openSongMenuBtn" class="bg-indigo-600 hover:bg-indigo-500 text-white px-4 py-2 rounded font-bold shadow-lg flex items-center gap-2">
+                <i class="fa-solid fa-list"></i> Songs
+            </button>
+            
+            <!-- NEW AUTO PLAY BUTTON -->
+            <button id="autoPlayBtn" class="bg-emerald-600 hover:bg-emerald-500 text-white px-4 py-2 rounded font-bold shadow-lg flex items-center gap-2 animate-pulse">
+                <i class="fa-solid fa-play"></i> Auto-Play
+            </button>
+
+            <button id="restartSongBtn" class="bg-gray-700 hover:bg-gray-600 text-white px-3 py-2 rounded text-sm font-bold shadow-lg" title="Restart">
+                <i class="fa-solid fa-rotate-left"></i>
+            </button>
+        </div>
+    </header>
+
+    <!-- MAIN CONTENT -->
+    <main class="flex-grow flex flex-col relative overflow-hidden">
+        <div class="progress-container">
+            <div id="progressBar" class="progress-fill"></div>
+        </div>
+
+        <div class="relative flex-grow w-full bg-gray-900">
+            <canvas id="gameCanvas" class="absolute inset-0 w-full h-full"></canvas>
+
+            <!-- UI Overlays -->
+            <div class="absolute inset-0 flex flex-col items-center justify-center p-4 z-10 pointer-events-none">
+                <div id="feedbackOverlay" class="mt-4 h-12 text-center pointer-events-auto">
+                    <span id="feedbackText" class="text-4xl font-black drop-shadow-[0_0_10px_rgba(0,0,0,0.8)]"></span>
+                </div>
+                <div id="freePlayFeedback" class="absolute top-10 flex flex-col items-center justify-center hidden">
+                    <div class="text-gray-500 text-xs uppercase tracking-widest mb-1">Note</div>
+                    <div id="playedNoteName" class="text-6xl font-black text-indigo-400 drop-shadow-lg">--</div>
+                </div>
+            </div>
+
+            <div class="absolute bottom-4 right-4 z-10 bg-gray-800/80 p-2 rounded border border-gray-700 w-10">
+                <div class="w-full h-16 bg-gray-900 rounded-sm flex items-end overflow-hidden">
+                    <div id="signalBar" class="w-full bg-green-500 transition-all duration-75" style="height: 0%"></div>
+                </div>
+            </div>
+
+            <!-- SONG MENU OVERLAY -->
+            <div id="songMenuOverlay" class="absolute inset-0 bg-gray-900/95 z-40 backdrop-blur-sm p-8 overflow-y-auto hidden flex flex-col items-center">
+                <div class="w-full max-w-5xl">
+                    <div class="flex justify-between items-center mb-8">
+                        <h2 class="text-4xl font-black text-white">Library</h2>
+                        <button id="closeSongMenu" class="text-gray-400 hover:text-white text-2xl"><i class="fa-solid fa-xmark"></i></button>
+                    </div>
+                    
+                    <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4" id="songGrid">
+                        <!-- Songs injected here -->
+                    </div>
+
+                    <div class="mt-8 border-t border-gray-700 pt-6 w-full">
+                        <h3 class="text-xl font-bold text-gray-400 mb-4">Tools</h3>
+                        <div class="flex gap-4 justify-center">
+                            <button id="menuImportBtn" class="bg-purple-600 hover:bg-purple-500 px-6 py-4 rounded-xl font-bold flex items-center gap-3 transition-transform hover:scale-105">
+                                <i class="fa-solid fa-file-import text-2xl"></i> Import MIDI File
+                            </button>
+                            <button id="menuSearchBtn" class="bg-blue-600 hover:bg-blue-500 px-6 py-4 rounded-xl font-bold flex items-center gap-3 transition-transform hover:scale-105">
+                                <i class="fa-solid fa-globe text-2xl"></i> Find Online
+                            </button>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- CONNECT MODAL -->
+            <div id="connectModal" class="absolute inset-0 bg-black/80 backdrop-blur-sm z-50 flex items-center justify-center p-4">
+                <div class="bg-gray-800 border border-gray-700 p-8 rounded-2xl shadow-2xl max-w-md w-full text-center">
+                    <h2 class="text-3xl font-bold text-white mb-4">Piano<span class="text-indigo-400">Buddy</span></h2>
+                    <p class="text-gray-400 mb-6 text-sm">Plug in your USB Cable to start.</p>
+                    <button id="btnConnectMidi" class="w-full bg-indigo-600 hover:bg-indigo-500 text-white font-bold py-6 px-6 rounded-xl flex items-center justify-center gap-4 group transition-all shadow-lg border border-indigo-500/50 mb-4">
+                        <i class="fa-brands fa-usb text-4xl group-hover:scale-110 transition-transform"></i>
+                        <div class="text-left">
+                            <div class="text-lg leading-tight">Connect USB</div>
+                            <div class="text-xs text-indigo-200 font-normal mt-1">Detects Gear4music GDP-200</div>
+                        </div>
+                    </button>
+                    <div id="connectError" class="mt-4 text-red-400 text-xs bg-red-900/30 p-2 rounded hidden border border-red-900/50"></div>
+                </div>
+            </div>
+
+            <!-- WIN MODAL -->
+            <div id="winModal" class="absolute inset-0 bg-black/80 backdrop-blur-sm z-50 flex items-center justify-center hidden">
+                <div class="text-center pop-in">
+                    <div class="text-6xl mb-4">🎉 ⭐ 🎹</div>
+                    <h2 class="text-4xl font-black text-white mb-2">Song Complete!</h2>
+                    <div class="text-xl text-yellow-400 mb-8 font-bold">Score: <span id="finalScore">0</span></div>
+                    <button id="btnPlayAgain" class="bg-green-500 hover:bg-green-400 text-white text-2xl font-bold py-4 px-12 rounded-full shadow-[0_0_30px_rgba(74,222,128,0.6)] transform hover:scale-105 transition-all">
+                        Play Again
+                    </button>
+                </div>
+            </div>
+
+            <!-- CALIBRATION MODAL -->
+            <div id="calibrateModal" class="absolute inset-0 bg-black/90 z-[60] flex items-center justify-center hidden">
+                <div class="bg-gray-800 p-8 rounded-xl border border-yellow-500/50 text-center max-w-sm">
+                    <i class="fa-solid fa-wrench text-4xl text-yellow-500 mb-4"></i>
+                    <h3 class="text-2xl font-bold text-white mb-2">Fix Wrong Notes</h3>
+                    <p class="text-gray-300 mb-6 text-sm">Press <b>Middle C</b> on your piano now.</p>
+                    <div id="calibStatus" class="text-xs font-mono text-gray-500 mb-4">Waiting for input...</div>
+                    <button id="cancelCalib" class="text-gray-400 hover:text-white underline text-sm">Cancel</button>
+                </div>
+            </div>
+        </div>
+
+        <!-- PIANO KEYBOARD -->
+        <div class="h-[160px] bg-gray-800 relative border-t-4 border-gray-700 shadow-2xl z-30 piano-scroll flex justify-center">
+            <svg id="pianoSvg" class="h-full block" preserveAspectRatio="none"></svg>
+        </div>
+    </main>
+
+    <!-- LOGIC -->
+    <script>
+        const STATE = {
+            mode: 'freeplay', 
+            waitMode: true,
+            easeMode: false,
+            isDemo: false,
+            transposeOffset: 0, 
+            songSteps: [], 
+            currentStepIndex: 0,
+            songTime: 0,
+            lastFrameTime: 0,
+            isPlaying: false,
+            score: 0,
+            midiAccess: null, 
+            audioContext: null, 
+            activeNotes: new Set(), 
+            correctlyHeldNotes: new Set() 
+        };
+
+        const NOTES = ['C', 'C#', 'D', 'D#', 'E', 'F', 'F#', 'G', 'G#', 'A', 'A#', 'B'];
+        
+        const PRESETS = {
+            'twinkle': { 
+                title: "Twinkle Twinkle", 
+                desc: "Great for beginners!",
+                raw: [60,60,67,67,69,69,67, 65,65,64,64,62,62,60, 67,67,65,65,64,64,62, 67,67,65,65,64,64,62, 60,60,67,67,69,69,67, 65,65,64,64,62,62,60] 
+            },
+            'rush_e': {
+                title: "Rush E (Easy Riff)",
+                desc: "The famous viral challenge (Simplified)",
+                raw: [64,64,64,64, 64,64,64,64, 67,66,64,63,64,66,71,69,67,66,64,63,64,66,71]
+            },
+            'happy_birthday': {
+                title: "Happy Birthday",
+                desc: "Classic celebration song",
+                raw: [60,60,62,60,65,64, 60,60,62,60,67,65, 60,60,72,69,65,64,62, 70,70,69,65,67,65]
+            },
+            'canon': {
+                title: "Canon in D",
+                desc: "Beautiful classical piece",
+                raw: [74, 73, 74, 69, 71, 73, 74, 74, 76, 78, 79, 79, 78, 76, 74, 76, 78, 78, 76, 74, 73, 74, 76, 76, 74, 73, 71, 73, 74]
+            },
+            'c_scale': { title: "C Major Scale", desc: "Practice your scales", raw: [60,62,64,65,67,69,71,72] },
+            'ode_to_joy': { title: "Ode to Joy", desc: "Beethoven's classic", raw: [64,64,65,67,67,65,64,62,60,60,62,64,64,62,62] }
+        };
+
+        const els = {
+            svg: document.getElementById('pianoSvg'),
+            canvas: document.getElementById('gameCanvas'),
+            ctx: document.getElementById('gameCanvas').getContext('2d'),
+            songSelect: null, // Removed select element logic, using menu now
+            connectModal: document.getElementById('connectModal'),
+            winModal: document.getElementById('winModal'),
+            calibModal: document.getElementById('calibrateModal'),
+            songMenuOverlay: document.getElementById('songMenuOverlay'),
+            songGrid: document.getElementById('songGrid'),
+            calibStatus: document.getElementById('calibStatus'),
+            statusText: document.getElementById('statusText'),
+            statusDot: document.getElementById('statusDot'),
+            signalBar: document.getElementById('signalBar'),
+            title: document.getElementById('songTitleDisplay'),
+            feedback: document.getElementById('feedbackText'),
+            freePlay: document.getElementById('freePlayFeedback'),
+            playedNoteName: document.getElementById('playedNoteName'),
+            connectError: document.getElementById('connectError'),
+            midiUpload: document.getElementById('midiUpload'),
+            waitModeToggle: document.getElementById('waitModeToggle'),
+            easeModeToggle: document.getElementById('easeModeToggle'),
+            waitModeContainer: document.getElementById('waitModeContainer'),
+            progressBar: document.getElementById('progressBar'),
+            scoreDisplay: document.getElementById('scoreDisplay'),
+            scoreValue: document.getElementById('scoreValue'),
+            finalScore: document.getElementById('finalScore'),
+            restartSongBtn: document.getElementById('restartSongBtn'),
+            btnPlayAgain: document.getElementById('btnPlayAgain'),
+            btnConnectMidi: document.getElementById('btnConnectMidi'),
+            menuSearchBtn: document.getElementById('menuSearchBtn'),
+            menuImportBtn: document.getElementById('menuImportBtn'),
+            openSongMenuBtn: document.getElementById('openSongMenuBtn'),
+            closeSongMenu: document.getElementById('closeSongMenu'),
+            calibrateBtn: document.getElementById('calibrateBtn'),
+            cancelCalib: document.getElementById('cancelCalib'),
+            autoPlayBtn: document.getElementById('autoPlayBtn')
+        };
+
+        const keyRects = {};
+        const WHITE_W = 40, BLACK_W = 24, KEY_H = 160, BLACK_H = 100;
+        const START_KEY = 21, END_KEY = 108;
+
+        // --- INITIALIZATION ---
+        function initPiano() {
+            els.svg.innerHTML = ''; 
+            let x = 0;
+            for (let i=START_KEY; i<=END_KEY; i++) {
+                if (!isBlack(i)) { 
+                    createKey(i, x, 0, WHITE_W, KEY_H, 'white'); 
+                    const label = document.createElementNS("http://www.w3.org/2000/svg", "text");
+                    label.setAttribute("x", x + WHITE_W/2);
+                    label.setAttribute("y", KEY_H - 10);
+                    label.setAttribute("text-anchor", "middle");
+                    label.setAttribute("class", "key-label");
+                    label.textContent = NOTES[i % 12];
+                    els.svg.appendChild(label);
+                    x += WHITE_W; 
+                }
+            }
+            els.svg.setAttribute('width', x); els.svg.setAttribute('viewBox', `0 0 ${x} ${KEY_H}`);
+            for (let i=START_KEY; i<=END_KEY; i++) {
+                if (isBlack(i)) {
+                    const prevX = parseFloat(keyRects[i-1].getAttribute('x'));
+                    createKey(i, prevX + (WHITE_W - BLACK_W/2), 0, BLACK_W, BLACK_H, 'black');
+                }
+            }
+            
+            buildSongMenu();
+            setTimeout(() => scrollToKey(60), 100);
+        }
+
+        function buildSongMenu() {
+            els.songGrid.innerHTML = '';
+            // Free Play Card
+            addSongCard('freeplay', { title: "🎹 Free Play", desc: "Just jam freely!" });
+            
+            // Presets
+            for (const [id, data] of Object.entries(PRESETS)) {
+                addSongCard(id, data);
+            }
+        }
+
+        function addSongCard(id, data) {
+            const card = document.createElement('div');
+            card.className = 'song-card';
+            
+            const content = `
+                <div><h3>${data.title}</h3><p>${data.desc}</p></div>
+                <div class="song-actions">
+                    <button class="action-btn btn-play" onclick="selectSong('${id}')"><i class="fa-solid fa-gamepad"></i> Play</button>
+                    ${id !== 'freeplay' ? `<button class="action-btn btn-listen" onclick="listenSong('${id}')"><i class="fa-solid fa-volume-high"></i> Listen</button>` : ''}
+                </div>
+            `;
+            card.innerHTML = content;
+            els.songGrid.appendChild(card);
+        }
+
+        // Global scope wrappers for HTML onclick
+        window.selectSong = (id) => { loadSong(id); els.songMenuOverlay.classList.add('hidden'); };
+        window.listenSong = (id) => { loadSong(id); els.songMenuOverlay.classList.add('hidden'); startDemo(); };
+
+        function createKey(midi, x, y, w, h, type) {
+            const rect = document.createElementNS("http://www.w3.org/2000/svg", "rect");
+            rect.setAttribute('x', x); rect.setAttribute('y', y); rect.setAttribute('width', w); rect.setAttribute('height', h);
+            rect.setAttribute('class', `key ${type}`); rect.setAttribute('rx', type === 'white' ? 4 : 2);
+            els.svg.appendChild(rect); keyRects[midi] = rect;
+        }
+
+        function isBlack(n) { return [1,3,6,8,10].includes(n % 12); }
+        function getNoteLabel(midi) { return NOTES[midi % 12]; }
+
+        function scrollToKey(midi) {
+            const key = keyRects[midi]; if (!key) return;
+            const x = parseFloat(key.getAttribute('x'));
+            document.querySelector('.piano-scroll').scrollTo({ left: x - document.body.clientWidth/2 + WHITE_W/2, behavior: 'smooth' });
+        }
+
+        function zoomPianoToSong() {
+            if (!STATE.easeMode || STATE.songSteps.length === 0) {
+                initPiano(); return;
+            }
+            let min = 108, max = 21;
+            STATE.songSteps.forEach(step => {
+                step.notes.forEach(n => {
+                    if (n.midi < min) min = n.midi;
+                    if (n.midi > max) max = n.midi;
+                });
+            });
+            min = Math.max(START_KEY, min - 4);
+            max = Math.min(END_KEY, max + 4);
+            const minKey = keyRects[min];
+            const maxKey = keyRects[max];
+            if (minKey && maxKey) {
+                const x1 = parseFloat(minKey.getAttribute('x'));
+                const x2 = parseFloat(maxKey.getAttribute('x')) + WHITE_W;
+                const width = x2 - x1;
+                els.svg.setAttribute('viewBox', `${x1} 0 ${width} ${KEY_H}`);
+            }
+        }
+
+        function loadSong(key) {
+            els.feedback.textContent = ''; els.feedback.className = '';
+            STATE.correctlyHeldNotes.clear(); STATE.songTime = 0; STATE.score = 0;
+            STATE.lastFrameTime = performance.now();
+            STATE.isDemo = false; 
+            // Reset to wait mode if we were in demo (unless user explicitly turned it off)
+            if(!STATE.easeMode) STATE.waitMode = els.waitModeToggle.checked; 
+            
+            updateScoreUI(); updateProgressUI(0);
+            els.autoPlayBtn.classList.remove('hidden');
+
+            if (key === 'import') {
+                els.midiUpload.click();
+                return;
+            }
+
+            if (key === 'freeplay') {
+                STATE.mode = 'freeplay';
+                els.title.textContent = "FREE PLAY";
+                els.freePlay.classList.remove('hidden');
+                els.scoreDisplay.classList.add('hidden');
+                els.autoPlayBtn.classList.add('hidden');
+                resetTargets();
+                if(STATE.easeMode) initPiano();
+                return;
+            }
+            
+            STATE.mode = 'song';
+            els.title.style.opacity = 1;
+            els.freePlay.classList.add('hidden');
+            els.winModal.classList.add('hidden');
+            els.scoreDisplay.classList.remove('hidden');
+            STATE.currentStepIndex = 0;
+            STATE.isPlaying = true;
+
+            if (PRESETS[key]) {
+                els.title.textContent = PRESETS[key].title;
+                const raw = PRESETS[key].raw;
+                const steps = raw.map((m, i) => ({
+                    time: i * 0.6,
+                    notes: [{ midi: m, duration: 0.5 }]
+                }));
+                STATE.songSteps = steps;
+            }
+
+            if (STATE.songSteps.length > 0) {
+                STATE.songTime = STATE.waitMode ? STATE.songSteps[0].time : -2;
+                STATE.songSteps.forEach(step => step.notes.forEach(n => n.played = false));
+            }
+
+            if (STATE.easeMode) zoomPianoToSong();
+            else if (STATE.songSteps.length > 0) scrollToKey(STATE.songSteps[0].notes[0].midi);
+
+            highlightTarget();
+        }
+
+        function startDemo() {
+            if (STATE.mode !== 'song') {
+                alert("Please select a song first!");
+                els.songMenuOverlay.classList.remove('hidden');
+                return;
+            }
+            STATE.isDemo = true;
+            STATE.waitMode = false; // Demo implies continuous play
+            STATE.songTime = STATE.songSteps.length > 0 ? STATE.songSteps[0].time - 1 : 0; 
+            STATE.currentStepIndex = 0;
+            STATE.isPlaying = true;
+            els.feedback.textContent = "Listen...";
+            els.feedback.className = "text-4xl font-black text-blue-400 drop-shadow-lg";
+            initAudio();
+        }
+
+        function resetTargets() { document.querySelectorAll('.target').forEach(el => el.classList.remove('target')); }
+
+        function highlightTarget() {
+            resetTargets();
+            if (STATE.mode !== 'song' || STATE.currentStepIndex >= STATE.songSteps.length || STATE.isDemo) return;
+            if (STATE.waitMode) {
+                const step = STATE.songSteps[STATE.currentStepIndex];
+                step.notes.forEach(n => { const key = keyRects[n.midi]; if (key) key.classList.add('target'); });
+                if (!STATE.easeMode && step.notes.length > 0) scrollToKey(step.notes[0].midi);
+            }
+        }
+
+        els.midiUpload.addEventListener('change', async (e) => {
+            const file = e.target.files[0];
+            if (!file) return;
+            try {
+                const arrayBuffer = await file.arrayBuffer();
+                const midiData = new Midi(arrayBuffer);
+                let allNotes = [];
+                midiData.tracks.forEach(track => {
+                    track.notes.forEach(n => {
+                        allNotes.push({ midi: n.midi, time: n.time, duration: n.duration });
+                    });
+                });
+                if (allNotes.length === 0) throw new Error("No notes found.");
+                allNotes.sort((a, b) => a.time - b.time);
+                const steps = [];
+                if (allNotes.length > 0) {
+                    let currentStep = { time: allNotes[0].time, notes: [allNotes[0]] };
+                    for (let i = 1; i < allNotes.length; i++) {
+                        const n = allNotes[i];
+                        if (Math.abs(n.time - currentStep.time) < 0.05) {
+                            currentStep.notes.push(n);
+                        } else {
+                            steps.push(currentStep);
+                            currentStep = { time: n.time, notes: [n] };
+                        }
+                    }
+                    steps.push(currentStep);
+                }
+                STATE.songSteps = steps;
+                els.title.textContent = file.name.replace('.mid','');
+                els.songMenuOverlay.classList.add('hidden');
+                loadSong('custom_loaded');
+            } catch (err) { alert("Error parsing MIDI: " + err.message); }
+        });
+
+        // Custom Load Handler for imported files
+        const origLoadSong = loadSong;
+        loadSong = function(key) {
+            if (key === 'custom_loaded') {
+                STATE.mode = 'song';
+                els.title.style.opacity = 1;
+                els.freePlay.classList.add('hidden');
+                els.winModal.classList.add('hidden');
+                els.scoreDisplay.classList.remove('hidden');
+                els.autoPlayBtn.classList.remove('hidden');
+                STATE.currentStepIndex = 0;
+                STATE.isPlaying = true;
+                STATE.isDemo = false;
+                if (STATE.songSteps.length > 0) {
+                    STATE.songTime = STATE.waitMode ? STATE.songSteps[0].time : -2;
+                    STATE.songSteps.forEach(step => step.notes.forEach(n => n.played = false));
+                }
+                if (STATE.easeMode) zoomPianoToSong();
+                else if (STATE.songSteps.length > 0) scrollToKey(STATE.songSteps[0].notes[0].midi);
+                highlightTarget();
+                return;
+            }
+            origLoadSong(key);
+        }
+
+        els.menuSearchBtn.addEventListener('click', () => window.open('https://bitmidi.com/', '_blank'));
+        els.menuImportBtn.addEventListener('click', () => els.midiUpload.click());
+        els.openSongMenuBtn.addEventListener('click', () => els.songMenuOverlay.classList.remove('hidden'));
+        els.closeSongMenu.addEventListener('click', () => els.songMenuOverlay.classList.add('hidden'));
+        els.autoPlayBtn.addEventListener('click', startDemo);
+
+        function handleNoteOn(midiRaw, velocity) {
+            const midi = midiRaw + STATE.transposeOffset;
+            if (STATE.activeNotes.has(midi)) return;
+            STATE.activeNotes.add(midi); playTone(midi); 
+            if (STATE.mode === 'freeplay') {
+                highlightKey(midi, 'active-neutral');
+                els.playedNoteName.textContent = `${getNoteLabel(midi)}${Math.floor(midi/12)-1}`;
+                createParticle(midi, 'up');
+            } else if (!STATE.isDemo) {
+                createParticle(midi, 'hit');
+                if (STATE.waitMode) checkWaitModeLogic(midi);
+                else checkContinuousHit(midi);
+            }
+        }
+
+        function handleNoteOff(midiRaw) {
+            const midi = midiRaw + STATE.transposeOffset;
+            STATE.activeNotes.delete(midi); STATE.correctlyHeldNotes.delete(midi); 
+            if (STATE.mode === 'freeplay') clearKeyColor(midi);
+            else if (!STATE.isDemo) {
+                if (STATE.waitMode) {
+                    const step = STATE.songSteps[STATE.currentStepIndex];
+                    const isInChord = step && step.notes.some(n => n.midi === midi);
+                    if (!isInChord) clearKeyColor(midi);
+                } else clearKeyColor(midi);
+            }
+        }
+
+        function checkWaitModeLogic(inputMidi) {
+            if (STATE.currentStepIndex >= STATE.songSteps.length) return;
+            const currentStep = STATE.songSteps[STATE.currentStepIndex];
+            const chordMidis = currentStep.notes.map(n => n.midi);
+            if (chordMidis.includes(inputMidi)) {
+                STATE.correctlyHeldNotes.add(inputMidi);
+                highlightKey(inputMidi, 'active-correct');
+                const allHeld = chordMidis.every(m => STATE.correctlyHeldNotes.has(m));
+                if (allHeld) {
+                    STATE.score += 10 * chordMidis.length;
+                    updateScoreUI();
+                    STATE.currentStepIndex++;
+                    STATE.correctlyHeldNotes.clear(); 
+                    if (STATE.currentStepIndex >= STATE.songSteps.length) finishSong();
+                    else { STATE.songTime = STATE.songSteps[STATE.currentStepIndex].time; highlightTarget(); }
+                    els.feedback.textContent = "Good!"; 
+                    els.feedback.className = "text-4xl font-black text-green-400 drop-shadow-lg";
+                }
+            } else highlightKey(inputMidi, 'active-wrong');
+        }
+
+        function checkContinuousHit(inputMidi) {
+            const hitWindow = 0.2; 
+            let hitFound = false;
+            for (let i = 0; i < STATE.songSteps.length; i++) {
+                const step = STATE.songSteps[i];
+                const timeDiff = step.time - STATE.songTime;
+                if (timeDiff < -hitWindow) continue; 
+                if (timeDiff > hitWindow) break; 
+
+                step.notes.forEach(note => {
+                    if (!note.played && note.midi === inputMidi) {
+                        note.played = true;
+                        STATE.score += 10;
+                        updateScoreUI();
+                        createParticle(inputMidi, 'hit');
+                        highlightKey(inputMidi, 'active-correct');
+                        setTimeout(() => clearKeyColor(inputMidi), 200); 
+                        hitFound = true;
+                    }
+                });
+                if (hitFound) break;
+            }
+            if (!hitFound) highlightKey(inputMidi, 'active-neutral');
+        }
+
+        function finishSong() {
+            STATE.isPlaying = false;
+            STATE.isDemo = false;
+            els.finalScore.textContent = STATE.score;
+            setTimeout(() => els.winModal.classList.remove('hidden'), 500);
+        }
+
+        function updateScoreUI() { els.scoreValue.textContent = STATE.score; }
+        function updateProgressUI(pct) { els.progressBar.style.width = `${pct}%`; }
+
+        function animate() {
+            els.canvas.width = els.canvas.parentElement.clientWidth; 
+            els.canvas.height = els.canvas.parentElement.clientHeight;
+            const scrollOffset = document.querySelector('.piano-scroll').scrollLeft;
+            els.ctx.clearRect(0, 0, els.canvas.width, els.canvas.height);
+            
+            const now = performance.now();
+            const dt = (now - STATE.lastFrameTime) / 1000;
+            STATE.lastFrameTime = now;
+
+            if (STATE.mode === 'song' && STATE.songSteps.length > 0) {
+                
+                if (STATE.isDemo && STATE.isPlaying) {
+                    STATE.songTime += dt;
+                    const lastStep = STATE.songSteps[STATE.songSteps.length-1];
+                    updateProgressUI(Math.min(100, (STATE.songTime / lastStep.time) * 100));
+                    
+                    while (STATE.currentStepIndex < STATE.songSteps.length) {
+                        const step = STATE.songSteps[STATE.currentStepIndex];
+                        if (step.time <= STATE.songTime) {
+                            step.notes.forEach(n => {
+                                playTone(n.midi);
+                                highlightKey(n.midi, 'active-correct');
+                                createParticle(n.midi, 'hit');
+                                setTimeout(() => clearKeyColor(n.midi), n.duration * 1000);
+                            });
+                            STATE.currentStepIndex++;
+                        } else break;
+                    }
+                    if (STATE.songTime > lastStep.time + 2) finishSong();
+                }
+                else if (STATE.isPlaying && !STATE.waitMode) {
+                    STATE.songTime += dt;
+                    const lastStep = STATE.songSteps[STATE.songSteps.length-1];
+                    updateProgressUI(Math.min(100, (STATE.songTime / lastStep.time) * 100));
+                    if (STATE.songTime > lastStep.time + 2) finishSong();
+                } else if (STATE.waitMode) {
+                    updateProgressUI((STATE.currentStepIndex / STATE.songSteps.length) * 100);
+                }
+
+                const zoom = 120;
+                let renderTimeBase = (STATE.waitMode && !STATE.isDemo) ? (STATE.songSteps[STATE.currentStepIndex]?.time || 0) : STATE.songTime;
+
+                STATE.songSteps.forEach((step, i) => {
+                    if (STATE.waitMode && !STATE.isDemo && i < STATE.currentStepIndex) return;
+                    
+                    const timeDiff = step.time - renderTimeBase;
+                    const keyY = els.canvas.height - 20;
+                    const yPos = keyY - (timeDiff * zoom);
+                    if (yPos < -200 || yPos > els.canvas.height + 100) return;
+
+                    step.notes.forEach(note => {
+                        if (!STATE.waitMode && !STATE.isDemo && note.played) return;
+                        
+                        const key = keyRects[note.midi];
+                        if (!key) return;
+                        
+                        const keyRect = key.getBoundingClientRect();
+                        const canvasRect = els.canvas.getBoundingClientRect();
+                        const x = keyRect.left - canvasRect.left;
+                        const w = keyRect.width;
+                        
+                        let color = `hsl(${note.midi * 20}, 60%, 50%)`; 
+                        if (STATE.waitMode && !STATE.isDemo && i === STATE.currentStepIndex) color = '#fcd34d';
+                        
+                        const h = Math.max(30, note.duration * zoom); 
+                        els.ctx.fillStyle = color; els.ctx.globalAlpha = 0.8;
+                        els.ctx.beginPath(); els.ctx.roundRect(x, yPos - h, w, h, 4); els.ctx.fill();
+                        
+                        if (h > 15) {
+                            els.ctx.fillStyle = isBlack(note.midi) ? '#fff' : '#000';
+                            els.ctx.font = "bold 12px Inter";
+                            els.ctx.textAlign = "center";
+                            els.ctx.textBaseline = "middle";
+                            els.ctx.fillText(getNoteLabel(note.midi), x + w/2, yPos - h/2);
+                        }
+                    });
+                });
+            }
+            drawParticles();
+            requestAnimationFrame(animate);
+        }
+
+        els.waitModeToggle.addEventListener('change', (e) => {
+            STATE.waitMode = e.target.checked;
+            if (!STATE.waitMode && STATE.songSteps.length > 0 && STATE.currentStepIndex < STATE.songSteps.length) {
+                STATE.songTime = STATE.songSteps[STATE.currentStepIndex].time;
+                resetTargets();
+            }
+            if (STATE.waitMode) highlightTarget();
+        });
+
+        els.easeModeToggle.addEventListener('change', (e) => {
+            STATE.easeMode = e.target.checked;
+            if (STATE.easeMode) {
+                els.waitModeToggle.checked = true; STATE.waitMode = true;
+                els.waitModeContainer.classList.add('opacity-50', 'pointer-events-none');
+                zoomPianoToSong();
+            } else {
+                els.waitModeContainer.classList.remove('opacity-50', 'pointer-events-none');
+                initPiano();
+            }
+        });
+
+        els.btnConnectMidi.addEventListener('click', async () => {
+            try {
+                if (!navigator.requestMIDIAccess) throw new Error("Browser not supported (Use Chrome)");
+                const midi = await navigator.requestMIDIAccess(); STATE.midiAccess = midi;
+                let count = 0;
+                for (let input of midi.inputs.values()) { input.onmidimessage = onMidiMessage; count++; }
+                if (count === 0) throw new Error("No MIDI device found. Plug in USB cable.");
+                els.connectModal.classList.add('hidden'); setStatus(true, 'Connected'); initAudio(); loadSong('freeplay');
+            } catch (e) { els.connectError.textContent = e.message; els.connectError.classList.remove('hidden'); }
+        });
+
+        function onMidiMessage(msg) {
+            const [cmd, note, vel] = msg.data;
+            if (cmd >= 248) return; 
+            flashSignal();
+            const type = cmd & 0xF0;
+            if (isCalibrating && type === 144 && vel > 0) { runCalibration(note); return; }
+            if (type === 144 && vel > 0) handleNoteOn(note, vel);
+            else if (type === 128 || (type === 144 && vel === 0)) handleNoteOff(note);
+        }
+
+        let isCalibrating = false;
+        els.calibrateBtn.addEventListener('click', () => { isCalibrating = true; els.calibModal.classList.remove('hidden'); els.calibStatus.textContent = "Press Middle C"; });
+        els.cancelCalib.addEventListener('click', () => { isCalibrating = false; els.calibModal.classList.add('hidden'); });
+        function runCalibration(inputMidi) {
+            STATE.transposeOffset = 60 - inputMidi; isCalibrating = false; els.calibModal.classList.add('hidden');
+            alert(`Calibrated! Offset: ${STATE.transposeOffset}`); clearAllKeys(); highlightTarget();
+        }
+
+        function highlightKey(midi, cls) { const key = keyRects[midi]; if (key) { key.classList.remove('active-correct', 'active-wrong', 'active-neutral'); key.classList.add(cls); } }
+        function clearKeyColor(midi) { const key = keyRects[midi]; if (key) key.classList.remove('active-correct', 'active-wrong', 'active-neutral'); }
+        function clearAllKeys() { document.querySelectorAll('.key').forEach(k => k.classList.remove('active-correct', 'active-wrong', 'active-neutral', 'target')); }
+        function initAudio() { if (!STATE.audioContext) STATE.audioContext = new (window.AudioContext || window.webkitAudioContext)(); if (STATE.audioContext.state === 'suspended') STATE.audioContext.resume(); }
+        function playTone(midi) {
+            if (!STATE.audioContext) return;
+            const osc = STATE.audioContext.createOscillator(), gain = STATE.audioContext.createGain();
+            osc.frequency.value = 440 * Math.pow(2, (midi - 69) / 12); osc.type = 'sine';
+            gain.gain.setValueAtTime(0.1, STATE.audioContext.currentTime); gain.gain.exponentialRampToValueAtTime(0.001, STATE.audioContext.currentTime + 0.5);
+            osc.connect(gain); gain.connect(STATE.audioContext.destination); osc.start(); osc.stop(STATE.audioContext.currentTime + 0.5);
+        }
+        const particles = [];
+        function createParticle(midi, type) {
+            const key = keyRects[midi]; if (!key) return;
+            const keyRect = key.getBoundingClientRect();
+            const canvasRect = els.canvas.getBoundingClientRect();
+            const x = keyRect.left - canvasRect.left;
+            const width = keyRect.width;
+            const color = `hsl(${midi * 20}, 70%, 60%)`;
+            if (type === 'up') particles.push({ x: x + width/2, y: els.canvas.height, color, speed: 4+Math.random()*2, size: width, type: 'up' });
+            else if (type === 'hit') for(let i=0; i<5; i++) particles.push({ x: x + width/2, y: els.canvas.height - 20, color: '#fff', speed: (Math.random()-0.5)*5, dy: -5-Math.random()*5, size: 5, type: 'burst', life: 1.0 });
+        }
+        function drawParticles() {
+            for (let i = particles.length - 1; i >= 0; i--) {
+                const p = particles[i]; 
+                if (p.type === 'up') {
+                    p.y -= p.speed; els.ctx.fillStyle = p.color; els.ctx.globalAlpha = 0.6 * (p.y / els.canvas.height);
+                    els.ctx.fillRect(p.x - p.size/2, p.y, p.size, 50);
+                    if (p.y < 0) particles.splice(i, 1);
+                } else if (p.type === 'burst') {
+                    p.x += p.speed; p.y += p.dy; p.dy += 0.5; p.life -= 0.05;
+                    els.ctx.fillStyle = p.color; els.ctx.globalAlpha = p.life;
+                    els.ctx.beginPath(); els.ctx.arc(p.x, p.y, p.size, 0, Math.PI*2); els.ctx.fill();
+                    if (p.life <= 0) particles.splice(i, 1);
+                }
+            }
+        }
+        function setStatus(connected, text) { els.statusDot.className = connected ? "w-2 h-2 rounded-full bg-green-500" : "w-2 h-2 rounded-full bg-red-500"; els.statusText.textContent = text; }
+        function flashSignal() { els.signalBar.style.height = '100%'; setTimeout(() => els.signalBar.style.height = '0%', 100); }
+
+        els.restartSongBtn.addEventListener('click', () => loadSong(STATE.mode === 'freeplay' ? 'freeplay' : (PRESETS[els.title.textContent] ? els.title.textContent : 'custom_loaded')));
+        els.btnPlayAgain.addEventListener('click', () => loadSong(els.title.textContent === 'FREE PLAY' ? 'freeplay' : 'custom_loaded'));
+        
+        initPiano(); animate();
+    </script>
+</body>
+</html>
